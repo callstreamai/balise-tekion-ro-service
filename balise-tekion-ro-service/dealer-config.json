@@ -91,7 +91,7 @@
         "key": "drop",
         "spoken": "drop the vehicle off",
         "callerPhrases": ["drop", "drop off", "leave it", "leave the car"],
-        "catalogNames": ["drop", "drop off", "drop-off", "dropoff"]
+        "catalogNames": ["self", "drop", "drop off", "drop-off", "dropoff"]
       },
       {
         "key": "shuttle",
