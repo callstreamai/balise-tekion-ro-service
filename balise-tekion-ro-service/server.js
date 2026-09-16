@@ -372,4 +372,6 @@ app.listen(PORT, () => {
   selfCheck(process.env.SELFCHECK_PHONE || "4015290445")
     .then((r) => console.log("[selfcheck]", JSON.stringify(r)))
     .catch((e) => console.error("[selfcheck] crashed", e.message));
+  // Keep the appointment index warm so no caller waits on a cold rebuild.
+  setInterval(() => { apptIndex.builtAt = 0; buildApptIndex().catch((e) => console.error("[appt-index] refresh failed", e.message)); }, 3 * 60 * 1000);
 });
