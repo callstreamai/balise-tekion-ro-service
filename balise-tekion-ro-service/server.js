@@ -112,24 +112,15 @@ function searchByPhone(phone10) {
   });
 }
 
-async function tekionGet(path, { retryOn401 = true } = {}) {
+async function tekionGet(path, { retryOn401 = true, version = "v4.0.0" } = {}) {
   const token = await getToken();
-  const res = await fetch(`${TEKION_BASE}/v4.0.0${path}`, {
+  const res = await fetch(`${TEKION_BASE}/${version}${path}`, {
     headers: { "Content-Type": "application/json", app_id: TEKION_APP_ID, Authorization: `Bearer ${token}`, dealer_id: TEKION_DEALER_ID },
   });
-  if (res.status === 401 && retryOn401) { tokenCache = { token: null, expiresAt: 0 }; return tekionGet(path, { retryOn401: false }); }
+  if (res.status === 401 && retryOn401) { tokenCache = { token: null, expiresAt: 0 }; return tekionGet(path, { retryOn401: false, version }); }
   const text = await res.text();
   if (!res.ok) throw Object.assign(new Error(`tekion ${res.status}`), { status: res.status, body: text.slice(0, 300) });
   return JSON.parse(text);
-}
-
-// Phones on the primary customer of one RO, as 10-digit strings.
-async function customerPhones(ro) {
-  const cid = ro.primaryCustomer?.id;
-  if (!cid) return [];
-  const r = await tekionGet(`/repair-orders/${ro.documentId}/ro-customers/${cid}`);
-  const c = r?.data ?? r;
-  return (c?.phones ?? []).map((ph) => normalizePhone(ph.number)).filter(Boolean);
 }
 
 async function mapLimit(items, limit, fn) {
@@ -140,47 +131,84 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
-// Index of open ROs -> customer phones. Rebuilt at most every 3 minutes.
-let phoneIndex = { builtAt: 0, entries: [] };
-let indexInFlight = null;
+// ---- Phone -> vehicle index, built from Appointment Search (v3.1.0) ---------------
+// Appointment Search has no phone filter, but each appointment carries customer.phones and
+// vehicle {vin, year, make, model}. We pull the last APPT_LOOKBACK_DAYS of appointments and
+// index phone -> [{vin, vehicle, customer, appointmentDateTime}]. Rebuilt every 3 minutes.
+const APPT_LOOKBACK_DAYS = Number(process.env.APPT_LOOKBACK_DAYS || 21);
+let apptIndex = { builtAt: 0, byPhone: new Map(), stats: {} };
+let apptInFlight = null;
 
-async function buildPhoneIndex() {
-  if (Date.now() - phoneIndex.builtAt < 3 * 60 * 1000) return phoneIndex.entries;
-  if (indexInFlight) return indexInFlight;
-  indexInFlight = (async () => {
-    const seen = new Map();
-    let nextPageToken, total = Infinity;
-    for (let page = 0; page < 10; page++) {
-      const body = { filters: [{ field: "status", operator: "IN", values: OPEN_STATUSES }], pageSize: 50, sort: [{ field: "creationTime", order: "DESC" }] };
-      if (nextPageToken) body.nextPageToken = nextPageToken;
-      const r = await tekionSearch(body);
-      total = r?.meta?.totalCount ?? total;
-      const before = seen.size;
-      for (const ro of r?.data?.results ?? []) seen.set(ro.documentId ?? ro.documentNumber, ro);
-      nextPageToken = r?.meta?.nextPageToken;
-      if (!nextPageToken || seen.size === before || seen.size >= total) break;
-    }
-    const ros = [...seen.values()];
-    let firstError = null;
-    const entries = await mapLimit(ros, 8, async (ro) => {
-      try { return { ro, phones: await customerPhones(ro) }; }
-      catch (e) { if (!firstError) firstError = { message: e.message, status: e.status, body: e.body, ro: ro.documentNumber, customerId: ro.primaryCustomer?.id }; return { ro, phones: [] }; }
-    });
-    phoneIndex = { builtAt: Date.now(), entries, firstError, noCustomerRef: ros.filter((ro) => !ro.primaryCustomer?.id).length };
-    console.log(`[index] ${entries.length} open ROs indexed (total ${total}), ${entries.filter((e) => e.phones.length).length} with phones, ${phoneIndex.noCustomerRef} without customer ref`, firstError ? "first customer error: " + JSON.stringify(firstError) : "");
-    return entries;
-  })();
-  try { return await indexInFlight; } finally { indexInFlight = null; }
+function spokenVehicle(v) {
+  return [v?.year, v?.make, v?.model].filter(Boolean).join(" ");
 }
 
-// Phone lookup, two strategies: Tekion text search first, then the customer-phone index.
+async function buildApptIndex() {
+  if (Date.now() - apptIndex.builtAt < 3 * 60 * 1000) return apptIndex;
+  if (apptInFlight) return apptInFlight;
+  apptInFlight = (async () => {
+    const now = Date.now();
+    const from = now - APPT_LOOKBACK_DAYS * 86400000;
+    const to = now + 2 * 86400000;
+    const byPhone = new Map();
+    let pages = 0, appts = 0, nextFetchKey = null, firstError = null;
+    try {
+      do {
+        const qs = new URLSearchParams({ appointmentStartTime: String(from), appointmentEndTime: String(to) });
+        if (nextFetchKey) qs.set("nextFetchKey", nextFetchKey);
+        const r = await tekionGet(`/appointments?${qs}`, { version: "v3.1.0" });
+        const data = r?.data ?? [];
+        for (const a of data) {
+          appts++;
+          const vin = a?.vehicle?.vin;
+          if (!vin) continue;
+          const phones = new Set([...(a?.customer?.phones ?? []), ...(a?.deliveryContact?.phones ?? [])].map((ph) => normalizePhone(ph.number)).filter(Boolean));
+          for (const ph of phones) {
+            const list = byPhone.get(ph) ?? [];
+            if (!list.some((e) => e.vin === vin)) list.push({ vin, vehicle: a.vehicle, customer: { firstName: a.customer?.firstName, lastName: a.customer?.lastName }, appointmentDateTime: a.appointmentDateTime, appointmentNumber: a.appointmentNumber });
+            byPhone.set(ph, list);
+          }
+        }
+        nextFetchKey = r?.meta?.nextFetchKey || null;
+        pages++;
+      } while (nextFetchKey && pages < 40);
+    } catch (e) {
+      firstError = { message: e.message, status: e.status, body: e.body };
+    }
+    apptIndex = { builtAt: Date.now(), byPhone, stats: { pages, appointments: appts, phones: byPhone.size, lookback_days: APPT_LOOKBACK_DAYS, firstError } };
+    console.log("[appt-index]", JSON.stringify(apptIndex.stats));
+    return apptIndex;
+  })();
+  try { return await apptInFlight; } finally { apptInFlight = null; }
+}
+
+// Open ROs for a set of VINs.
+async function openRosForVins(vins) {
+  if (!vins.length) return [];
+  const r = await tekionSearch({
+    filters: [
+      { field: "vin", operator: "IN", values: vins },
+      { field: "status", operator: "IN", values: OPEN_STATUSES },
+    ],
+    pageSize: 10,
+    sort: [{ field: "creationTime", order: "DESC" }],
+  });
+  return r?.data?.results ?? [];
+}
+
+// Phone lookup: text search first (cheap), then the appointment index -> VIN -> open RO.
 async function findByPhone(phone10) {
   const r = await searchByPhone(phone10);
   const direct = r?.data?.results ?? [];
-  if (direct.length) return { results: direct, via: "text_search" };
-  const entries = await buildPhoneIndex();
-  const hits = entries.filter((e) => e.phones.includes(phone10)).map((e) => e.ro);
-  return { results: hits, via: "customer_index" };
+  if (direct.length) return { results: direct, via: "text_search", vehicles: {} };
+
+  const idx = await buildApptIndex();
+  const entries = idx.byPhone.get(phone10) ?? [];
+  if (!entries.length) return { results: [], via: "appointment_index", vehicles: {} };
+  const ros = await openRosForVins(entries.map((e) => e.vin));
+  // Attach the vehicle description from the appointment so the agent can say "your 2022 Nissan Rogue".
+  const vehicles = Object.fromEntries(entries.map((e) => [e.vin, e]));
+  return { results: ros, via: "appointment_index", vehicles };
 }
 
 // Normalize anything (E.164 caller ID, spoken digits, formatted) to 10 US digits.
@@ -208,7 +236,7 @@ app.use(express.json({ limit: "64kb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true, dealer: DEALER_NAME, tekion_base: TEKION_BASE }));
 
-function describe(ro) {
+function describe(ro, veh) {
   const promise = (ro.schedule || []).find((s) => s.type === "PROMISE_TIME")?.value;
   const checkin = (ro.schedule || []).find((s) => s.type === "CHECKIN_TIME")?.value || ro.creationTime;
   return {
@@ -219,6 +247,9 @@ function describe(ro) {
     tag_number: ro.tagNumber ?? "",
     opened_spoken: spokenDate(checkin),
     promise_time_spoken: spokenTime(promise),
+    vehicle_spoken: veh ? spokenVehicle(veh.vehicle) : "",
+    vin: ro.vin ?? veh?.vin ?? "",
+    customer_first_name: veh?.customer?.firstName ?? "",
   };
 }
 
@@ -250,25 +281,27 @@ app.post("/ro-status", async (req, res) => {
   if (!roNumber && !phone) return res.json({ ...base, found: false, match_count: 0, reason: "missing_input" });
 
   try {
-    let results, via = "ro_number";
+    let results, via = "ro_number", vehicles = {};
     if (roNumber) results = (await searchByRoNumber(roNumber))?.data?.results ?? [];
-    else ({ results, via } = await findByPhone(phone));
+    else ({ results, via, vehicles } = await findByPhone(phone));
     base.via = via;
+    // RO search results reference the vehicle by link only; match back to the appointment vehicle when there is exactly one.
+    const vehFor = (ro) => vehicles[ro.vin] ?? (Object.keys(vehicles).length === 1 ? Object.values(vehicles)[0] : undefined);
 
     if (results.length === 0) return res.json({ ...base, found: false, match_count: 0, reason: "no_match", ro_number: roNumber, phone });
 
     if (results.length === 1 || roNumber) {
-      return res.json({ ...base, found: true, match_count: 1, ...describe(results[0]) });
+      return res.json({ ...base, found: true, match_count: 1, ...describe(results[0], vehFor(results[0])) });
     }
 
     // Several open ROs on one phone (two cars, or a household). Hand back enough to disambiguate.
-    const options = results.slice(0, 3).map(describe);
+    const options = results.slice(0, 3).map((ro) => describe(ro, vehFor(ro)));
     return res.json({
       ...base,
       found: false,
       match_count: results.length,
       reason: "multiple_matches",
-      options_spoken: options.map((o) => `one opened ${o.opened_spoken} ending in ${o.ro_last4.split("").join(" ")}`).join(", and "),
+      options_spoken: options.map((o) => o.vehicle_spoken ? `the ${o.vehicle_spoken}` : `one opened ${o.opened_spoken} ending in ${o.ro_last4.split("").join(" ")}`).join(", and "),
       options,
     });
   } catch (err) {
@@ -296,17 +329,16 @@ async function selfCheck(phone) {
     out.open_ro_search = { ok: false, error: e.message, tekion_status: e.status, body: e.body };
   }
   try {
-    const entries = await buildPhoneIndex();
-    const withPhone = entries.find((e) => e.phones.length);
-    out.customer_index = { ok: true, open_ros: entries.length, with_phones: entries.filter((e) => e.phones.length).length, no_customer_ref: phoneIndex.noCustomerRef, first_customer_error: phoneIndex.firstError, sample_customer_link: entries[0]?.ro?.primaryCustomer?.link ?? null };
-    if (withPhone) {
-      const probe = withPhone.phones[0];
-      const r = await searchByPhone(probe);
-      out.text_search_indexes_phone = (r?.data?.results ?? []).length > 0;
-      out.probe_ro = withPhone.ro.documentNumber;
+    const idx = await buildApptIndex();
+    out.appointment_index = idx.stats;
+    // Probe: take a real phone from the index and prove phone -> VIN -> open RO end to end.
+    for (const [ph, entries] of idx.byPhone) {
+      const ros = await openRosForVins(entries.map((e) => e.vin));
+      if (ros.length) { out.probe = { phone_masked: ph.slice(0, 3) + "*****" + ph.slice(-2), vehicle: spokenVehicle(entries[0].vehicle), open_ro: ros[0].documentNumber, status: ros[0].status }; break; }
     }
+    if (!out.probe) out.probe = "no indexed phone currently has an open RO";
   } catch (e) {
-    out.customer_index = { ok: false, error: e.message, tekion_status: e.status, body: e.body };
+    out.appointment_index = { ok: false, error: e.message, tekion_status: e.status, body: e.body };
   }
   const p = normalizePhone(phone);
   if (p) {
