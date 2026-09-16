@@ -9,11 +9,11 @@ services:
     healthCheckPath: /health
     envVars:
       - key: TEKION_BASE
-        value: https://api-sandbox.tekioncloud.com/openapi
+        value: https://api.tekioncloud.com/openapi
       - key: TEKION_APP_ID
         value: 1818f9b3-45c6-4bcb-9eee-2c0d1b0217c1
       - key: TEKION_DEALER_ID
-        value: baliseautogroup_7746_0
+        value: baliseautogroup_7772_0
       - key: DEALER_NAME
         value: Balise Nissan of Warwick
       - key: TEKION_SECRET_KEY
