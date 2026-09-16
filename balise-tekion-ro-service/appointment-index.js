@@ -5,7 +5,7 @@
 
 import { tekion } from "./tekion.js";
 
-export const APPT_LOOKBACK_DAYS = Number(process.env.APPT_LOOKBACK_DAYS || 7);
+export const APPT_LOOKBACK_DAYS = Number(process.env.APPT_LOOKBACK_DAYS || 5); // + AHEAD_DAYS must stay under Tekion's 7-day cap
 export const REFRESH_MS = Number(process.env.APPT_REFRESH_MINUTES || 15) * 60 * 1000;
 const AHEAD_DAYS = Number(process.env.APPT_AHEAD_DAYS || 2);
 
@@ -41,7 +41,7 @@ export async function buildApptIndex(force = false) {
     const now = Date.now(), DAY = 86400000;
     const byPhone = new Map();
     let pages = 0, appts = 0, error = null;
-    const from = now - APPT_LOOKBACK_DAYS * DAY, to = now + AHEAD_DAYS * DAY;
+    const from = now - APPT_LOOKBACK_DAYS * DAY, to = Math.min(now + AHEAD_DAYS * DAY, from + 7 * DAY - 60000);
     try {
       let nextFetchKey = null;
       do {
