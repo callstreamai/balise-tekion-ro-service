@@ -148,34 +148,42 @@ async function buildApptIndex() {
   if (apptInFlight) return apptInFlight;
   apptInFlight = (async () => {
     const now = Date.now();
-    const from = now - APPT_LOOKBACK_DAYS * 86400000;
-    const to = now + 2 * 86400000;
+    const DAY = 86400000;
     const byPhone = new Map();
-    let pages = 0, appts = 0, nextFetchKey = null, firstError = null;
-    try {
-      do {
-        const qs = new URLSearchParams({ appointmentStartTime: String(from), appointmentEndTime: String(to) });
-        if (nextFetchKey) qs.set("nextFetchKey", nextFetchKey);
-        const r = await tekionGet(`/appointments?${qs}`, { version: "v3.1.0" });
-        const data = r?.data ?? [];
-        for (const a of data) {
-          appts++;
-          const vin = a?.vehicle?.vin;
-          if (!vin) continue;
-          const phones = new Set([...(a?.customer?.phones ?? []), ...(a?.deliveryContact?.phones ?? [])].map((ph) => normalizePhone(ph.number)).filter(Boolean));
-          for (const ph of phones) {
-            const list = byPhone.get(ph) ?? [];
-            if (!list.some((e) => e.vin === vin)) list.push({ vin, vehicle: a.vehicle, customer: { firstName: a.customer?.firstName, lastName: a.customer?.lastName }, appointmentDateTime: a.appointmentDateTime, appointmentNumber: a.appointmentNumber });
-            byPhone.set(ph, list);
+    let pages = 0, appts = 0;
+    const chunks = [];
+    // Tekion caps each query at a 7-day span, so walk back in 7-day windows (newest first).
+    const windows = [[now, now + 2 * DAY]];
+    for (let d = 0; d < APPT_LOOKBACK_DAYS; d += 7) windows.push([now - Math.min(d + 7, APPT_LOOKBACK_DAYS) * DAY, now - d * DAY]);
+    for (const [from, to] of windows) {
+      let nextFetchKey = null, chunkPages = 0, chunkAppts = 0, error = null;
+      try {
+        do {
+          const qs = new URLSearchParams({ appointmentStartTime: String(from), appointmentEndTime: String(to) });
+          if (nextFetchKey) qs.set("nextFetchKey", nextFetchKey);
+          const r = await tekionGet(`/appointments?${qs}`, { version: "v3.1.0" });
+          const data = r?.data ?? [];
+          for (const a of data) {
+            appts++; chunkAppts++;
+            const vin = a?.vehicle?.vin;
+            if (!vin) continue;
+            const phones = new Set([...(a?.customer?.phones ?? []), ...(a?.deliveryContact?.phones ?? [])].map((ph) => normalizePhone(ph.number)).filter(Boolean));
+            for (const ph of phones) {
+              const list = byPhone.get(ph) ?? [];
+              if (!list.some((e) => e.vin === vin)) list.push({ vin, vehicle: a.vehicle, customer: { firstName: a.customer?.firstName, lastName: a.customer?.lastName }, appointmentDateTime: a.appointmentDateTime, appointmentNumber: a.appointmentNumber });
+              byPhone.set(ph, list);
+            }
           }
-        }
-        nextFetchKey = r?.meta?.nextFetchKey || null;
-        pages++;
-      } while (nextFetchKey && pages < 40);
-    } catch (e) {
-      firstError = { message: e.message, status: e.status, body: e.body };
+          nextFetchKey = r?.meta?.nextFetchKey || null;
+          pages++; chunkPages++;
+        } while (nextFetchKey && chunkPages < 20);
+      } catch (e) {
+        error = e.body ? e.body.slice(0, 160) : e.message;
+      }
+      chunks.push({ days_ago: [Math.round((now - to) / DAY), Math.round((now - from) / DAY)], pages: chunkPages, appointments: chunkAppts, error });
     }
-    apptIndex = { builtAt: Date.now(), byPhone, stats: { pages, appointments: appts, phones: byPhone.size, lookback_days: APPT_LOOKBACK_DAYS, firstError } };
+    const firstError = chunks.find((c) => c.error)?.error ?? null;
+    apptIndex = { builtAt: Date.now(), byPhone, stats: { pages, appointments: appts, phones: byPhone.size, lookback_days: APPT_LOOKBACK_DAYS, chunks, firstError } };
     console.log("[appt-index]", JSON.stringify(apptIndex.stats));
     return apptIndex;
   })();
