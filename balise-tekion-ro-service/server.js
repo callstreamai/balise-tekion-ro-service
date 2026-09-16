@@ -148,21 +148,26 @@ async function buildPhoneIndex() {
   if (Date.now() - phoneIndex.builtAt < 3 * 60 * 1000) return phoneIndex.entries;
   if (indexInFlight) return indexInFlight;
   indexInFlight = (async () => {
-    const ros = [];
-    let nextPageToken;
+    const seen = new Map();
+    let nextPageToken, total = Infinity;
     for (let page = 0; page < 10; page++) {
       const body = { filters: [{ field: "status", operator: "IN", values: OPEN_STATUSES }], pageSize: 50, sort: [{ field: "creationTime", order: "DESC" }] };
       if (nextPageToken) body.nextPageToken = nextPageToken;
       const r = await tekionSearch(body);
-      ros.push(...(r?.data?.results ?? []));
+      total = r?.meta?.totalCount ?? total;
+      const before = seen.size;
+      for (const ro of r?.data?.results ?? []) seen.set(ro.documentId ?? ro.documentNumber, ro);
       nextPageToken = r?.meta?.nextPageToken;
-      if (!nextPageToken || (r?.data?.results ?? []).length === 0) break;
+      if (!nextPageToken || seen.size === before || seen.size >= total) break;
     }
+    const ros = [...seen.values()];
+    let firstError = null;
     const entries = await mapLimit(ros, 8, async (ro) => {
-      try { return { ro, phones: await customerPhones(ro) }; } catch (e) { return { ro, phones: [] }; }
+      try { return { ro, phones: await customerPhones(ro) }; }
+      catch (e) { if (!firstError) firstError = { message: e.message, status: e.status, body: e.body, ro: ro.documentNumber, customerId: ro.primaryCustomer?.id }; return { ro, phones: [] }; }
     });
-    phoneIndex = { builtAt: Date.now(), entries };
-    console.log(`[index] ${entries.length} open ROs indexed, ${entries.filter((e) => e.phones.length).length} with phones`);
+    phoneIndex = { builtAt: Date.now(), entries, firstError, noCustomerRef: ros.filter((ro) => !ro.primaryCustomer?.id).length };
+    console.log(`[index] ${entries.length} open ROs indexed (total ${total}), ${entries.filter((e) => e.phones.length).length} with phones, ${phoneIndex.noCustomerRef} without customer ref`, firstError ? "first customer error: " + JSON.stringify(firstError) : "");
     return entries;
   })();
   try { return await indexInFlight; } finally { indexInFlight = null; }
@@ -293,7 +298,7 @@ async function selfCheck(phone) {
   try {
     const entries = await buildPhoneIndex();
     const withPhone = entries.find((e) => e.phones.length);
-    out.customer_index = { ok: true, open_ros: entries.length, with_phones: entries.filter((e) => e.phones.length).length };
+    out.customer_index = { ok: true, open_ros: entries.length, with_phones: entries.filter((e) => e.phones.length).length, no_customer_ref: phoneIndex.noCustomerRef, first_customer_error: phoneIndex.firstError, sample_customer_link: entries[0]?.ro?.primaryCustomer?.link ?? null };
     if (withPhone) {
       const probe = withPhone.phones[0];
       const r = await searchByPhone(probe);
