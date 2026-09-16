@@ -65,7 +65,10 @@ export async function loadCatalog(force = false) {
     if (transportation) catalog.transportation = transportation.filter((t) => !t.status || /active/i.test(t.status));
     if (advisors) catalog.advisors = advisors;
     if (opcodes) catalog.opcodes = opcodes;
-    if (cc) catalog.customConcern = (cc.data ?? [])[0] ?? null;
+    // Tekion may ignore customConcern=true and return the first opcode; accept only an opcode that is clearly a concern placeholder.
+    const looksLikeConcern = (o) => /concern|complain|customer states|cust states|diagnos/i.test(`${o?.opcode} ${o?.description}`);
+    const ccHit = (cc?.data ?? []).find(looksLikeConcern) ?? (opcodes ?? []).find((o) => /custom(er)? concern/i.test(o.description ?? ""));
+    catalog.customConcern = ccHit ?? null;
     catalog.menu = resolveMenu(config.services.menu, catalog.opcodes);
     catalog.error = errors.length ? errors.join(" | ") : null;
     catalog.loadedAt = Date.now();
@@ -547,9 +550,12 @@ r.post("/find", wrap(async (s, b, res, base, phone) => {
   if (!customers.length && phone) { customers = await searchCustomersByPhone(phone); s.phone = phone; }
   let appts = [];
   for (const c of customers) {
-    const qs = new URLSearchParams({ customerId: c.id, appointmentStartTime: String(start), appointmentEndTime: String(end) });
-    const r = await tekion.get(`/appointments?${qs}`);
-    appts.push(...(r?.data ?? []));
+    const WINDOW = 7 * 86400000 - 60000; // Tekion caps each query at 7 days, so walk the horizon in windows
+    for (let from = start; from < end; from += WINDOW) {
+      const qs = new URLSearchParams({ customerId: c.id, appointmentStartTime: String(from), appointmentEndTime: String(Math.min(from + WINDOW, end)) });
+      const r = await tekion.get(`/appointments?${qs}`);
+      appts.push(...(r?.data ?? []));
+    }
   }
   if (!appts.length && phone) {
     const idx = await buildApptIndex();
