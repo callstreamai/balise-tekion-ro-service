@@ -345,6 +345,23 @@ async function selfCheck(phone) {
       if (ros.length) { out.probe = { phone_masked: ph.slice(0, 3) + "*****" + ph.slice(-2), vehicle: spokenVehicle(entries[0].vehicle), open_ro: ros[0].documentNumber, status: ros[0].status }; break; }
     }
     if (!out.probe) out.probe = "no indexed phone currently has an open RO";
+    // Dealer-approved diagnostic: with DIAG_LOG_PHONES=true, log up to 3 full phone -> RO matches for test-call setup.
+    if (process.env.DIAG_LOG_PHONES === "true") {
+      const full = [];
+      let checked = 0;
+      for (const [ph, entries] of idx.byPhone) {
+        if (full.length >= 3 || checked >= 60) break;
+        checked++;
+        try {
+          const ros = await openRosForVins(entries.map((e) => e.vin));
+          for (const ro of ros) {
+            const veh = entries.length === 1 ? entries[0] : entries.find((e) => e.vin === ro.vin);
+            full.push({ ro_number: ro.documentNumber, status: ro.status, phone: ph, vehicle: spokenVehicle(veh?.vehicle), first_name: veh?.customer?.firstName ?? "", appointment: spokenDate(veh?.appointmentDateTime) });
+          }
+        } catch (e) { /* skip */ }
+      }
+      console.log("[diag-phones]", JSON.stringify(full));
+    }
   } catch (e) {
     out.appointment_index = { ok: false, error: e.message, tekion_status: e.status, body: e.body };
   }
@@ -359,6 +376,31 @@ async function selfCheck(phone) {
   }
   return out;
 }
+
+// GET /diag/matches?limit=3  (protected). Returns open ROs that resolve from a phone in the appointment
+// index, with the full phone number, for test-call setup. Only the caller of this endpoint sees the numbers;
+// the log records counts only.
+app.get("/diag/matches", async (req, res) => {
+  const auth = req.get("authorization") || "";
+  if (!WEBHOOK_SECRET || auth !== `Bearer ${WEBHOOK_SECRET}`) return res.status(401).json({ reason: "unauthorized" });
+  const limit = Math.min(Number(req.query.limit) || 3, 10);
+  const idx = await buildApptIndex();
+  const matches = [];
+  let checked = 0;
+  for (const [ph, entries] of idx.byPhone) {
+    if (matches.length >= limit || checked >= 60) break;
+    checked++;
+    try {
+      const ros = await openRosForVins(entries.map((e) => e.vin));
+      for (const ro of ros) {
+        const veh = entries.length === 1 ? entries[0] : entries.find((e) => e.vin === ro.vin);
+        matches.push({ ro_number: ro.documentNumber, status: ro.status, phone: ph, vehicle: spokenVehicle(veh?.vehicle), customer_first_name: veh?.customer?.firstName ?? "", appointment: spokenDate(veh?.appointmentDateTime) });
+      }
+    } catch (e) { /* skip */ }
+  }
+  console.log(`[diag] matches requested: ${matches.length} returned after checking ${checked} phones`);
+  res.json({ dealer: DEALER_NAME, checked_phones: checked, matches });
+});
 
 // GET /diag?phone=4015290445  (protected by the same webhook secret)
 app.get("/diag", async (req, res) => {
