@@ -135,16 +135,27 @@ async function mapLimit(items, limit, fn) {
 // Appointment Search has no phone filter, but each appointment carries customer.phones and
 // vehicle {vin, year, make, model}. We pull the last APPT_LOOKBACK_DAYS of appointments and
 // index phone -> [{vin, vehicle, customer, appointmentDateTime}]. Rebuilt every 3 minutes.
-const APPT_LOOKBACK_DAYS = Number(process.env.APPT_LOOKBACK_DAYS || 21);
+const APPT_LOOKBACK_DAYS = Number(process.env.APPT_LOOKBACK_DAYS || 7); // Tekion rejects anything older than 7 days
+const REFRESH_MS = Number(process.env.APPT_REFRESH_MINUTES || 15) * 60 * 1000;
 let apptIndex = { builtAt: 0, byPhone: new Map(), stats: {} };
 let apptInFlight = null;
 
+const NISSAN_MODELS = ["Altima", "Ariya", "Armada", "Frontier", "Kicks", "Leaf", "Maxima", "Murano", "Pathfinder", "Rogue", "Rogue Sport", "Sentra", "Titan", "Titan XD", "Versa", "Z"];
+function normalizeModel(make, model) {
+  if (!model) return "";
+  const m = String(model).trim();
+  if (/nissan/i.test(make || "")) {
+    const hit = NISSAN_MODELS.find((full) => full.toLowerCase().startsWith(m.toLowerCase()) && m.length >= 3);
+    if (hit) return hit;
+  }
+  return m;
+}
 function spokenVehicle(v) {
-  return [v?.year, v?.make, v?.model].filter(Boolean).join(" ");
+  return [v?.year, v?.make, normalizeModel(v?.make, v?.model)].filter(Boolean).join(" ");
 }
 
 async function buildApptIndex() {
-  if (Date.now() - apptIndex.builtAt < 3 * 60 * 1000) return apptIndex;
+  if (Date.now() - apptIndex.builtAt < REFRESH_MS) return apptIndex;
   if (apptInFlight) return apptInFlight;
   apptInFlight = (async () => {
     const now = Date.now();
@@ -153,8 +164,8 @@ async function buildApptIndex() {
     let pages = 0, appts = 0;
     const chunks = [];
     // Tekion caps each query at a 7-day span, so walk back in 7-day windows (newest first).
-    const windows = [[now, now + 2 * DAY]];
-    for (let d = 0; d < APPT_LOOKBACK_DAYS; d += 7) windows.push([now - Math.min(d + 7, APPT_LOOKBACK_DAYS) * DAY, now - d * DAY]);
+    // One window covering the permitted range: 7 days back through 2 days ahead.
+    const windows = [[now - APPT_LOOKBACK_DAYS * DAY, now + 2 * DAY]];
     for (const [from, to] of windows) {
       let nextFetchKey = null, chunkPages = 0, chunkAppts = 0, error = null;
       try {
@@ -415,5 +426,5 @@ app.listen(PORT, () => {
     .then((r) => console.log("[selfcheck]", JSON.stringify(r)))
     .catch((e) => console.error("[selfcheck] crashed", e.message));
   // Keep the appointment index warm so no caller waits on a cold rebuild.
-  setInterval(() => { apptIndex.builtAt = 0; buildApptIndex().catch((e) => console.error("[appt-index] refresh failed", e.message)); }, 3 * 60 * 1000);
+  setInterval(() => { apptIndex.builtAt = 0; buildApptIndex().catch((e) => console.error("[appt-index] refresh failed", e.message)); }, REFRESH_MS);
 });
