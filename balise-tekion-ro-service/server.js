@@ -57,7 +57,8 @@ async function getToken() {
     // Tekion's doc shows "data": {...} without naming the fields; accept the common spellings.
     const token = d.access_token ?? d.accessToken ?? d.token ?? d.bearerToken;
     console.log("[tekion] token response fields:", Object.keys(d).join(","), "| token field found:", Boolean(token));
-    let expiresAt = Number(d.expires_at ?? d.expiresAt ?? d.expiry ?? d.expiryTime ?? 0);
+    let expiresAt = Number(d.expire_on ?? d.expires_at ?? d.expiresAt ?? d.expiry ?? 0);
+    if (expiresAt && expiresAt < 1e12) expiresAt *= 1000; // seconds -> ms
     if (!token) throw new Error(`token response had no token field: ${Object.keys(d).join(",")}`);
     if (!expiresAt || expiresAt < Date.now()) expiresAt = Date.now() + 23 * 3600 * 1000;
     tokenCache = { token, expiresAt };
@@ -109,6 +110,72 @@ function searchByPhone(phone10) {
     pageSize: 10,
     sort: [{ field: "creationTime", order: "DESC" }],
   });
+}
+
+async function tekionGet(path, { retryOn401 = true } = {}) {
+  const token = await getToken();
+  const res = await fetch(`${TEKION_BASE}/v4.0.0${path}`, {
+    headers: { "Content-Type": "application/json", app_id: TEKION_APP_ID, Authorization: `Bearer ${token}`, dealer_id: TEKION_DEALER_ID },
+  });
+  if (res.status === 401 && retryOn401) { tokenCache = { token: null, expiresAt: 0 }; return tekionGet(path, { retryOn401: false }); }
+  const text = await res.text();
+  if (!res.ok) throw Object.assign(new Error(`tekion ${res.status}`), { status: res.status, body: text.slice(0, 300) });
+  return JSON.parse(text);
+}
+
+// Phones on the primary customer of one RO, as 10-digit strings.
+async function customerPhones(ro) {
+  const cid = ro.primaryCustomer?.id;
+  if (!cid) return [];
+  const r = await tekionGet(`/repair-orders/${ro.documentId}/ro-customers/${cid}`);
+  const c = r?.data ?? r;
+  return (c?.phones ?? []).map((ph) => normalizePhone(ph.number)).filter(Boolean);
+}
+
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length); let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const idx = i++; out[idx] = await fn(items[idx], idx); }
+  }));
+  return out;
+}
+
+// Index of open ROs -> customer phones. Rebuilt at most every 3 minutes.
+let phoneIndex = { builtAt: 0, entries: [] };
+let indexInFlight = null;
+
+async function buildPhoneIndex() {
+  if (Date.now() - phoneIndex.builtAt < 3 * 60 * 1000) return phoneIndex.entries;
+  if (indexInFlight) return indexInFlight;
+  indexInFlight = (async () => {
+    const ros = [];
+    let nextPageToken;
+    for (let page = 0; page < 10; page++) {
+      const body = { filters: [{ field: "status", operator: "IN", values: OPEN_STATUSES }], pageSize: 50, sort: [{ field: "creationTime", order: "DESC" }] };
+      if (nextPageToken) body.nextPageToken = nextPageToken;
+      const r = await tekionSearch(body);
+      ros.push(...(r?.data?.results ?? []));
+      nextPageToken = r?.meta?.nextPageToken;
+      if (!nextPageToken || (r?.data?.results ?? []).length === 0) break;
+    }
+    const entries = await mapLimit(ros, 8, async (ro) => {
+      try { return { ro, phones: await customerPhones(ro) }; } catch (e) { return { ro, phones: [] }; }
+    });
+    phoneIndex = { builtAt: Date.now(), entries };
+    console.log(`[index] ${entries.length} open ROs indexed, ${entries.filter((e) => e.phones.length).length} with phones`);
+    return entries;
+  })();
+  try { return await indexInFlight; } finally { indexInFlight = null; }
+}
+
+// Phone lookup, two strategies: Tekion text search first, then the customer-phone index.
+async function findByPhone(phone10) {
+  const r = await searchByPhone(phone10);
+  const direct = r?.data?.results ?? [];
+  if (direct.length) return { results: direct, via: "text_search" };
+  const entries = await buildPhoneIndex();
+  const hits = entries.filter((e) => e.phones.includes(phone10)).map((e) => e.ro);
+  return { results: hits, via: "customer_index" };
 }
 
 // Normalize anything (E.164 caller ID, spoken digits, formatted) to 10 US digits.
@@ -178,8 +245,10 @@ app.post("/ro-status", async (req, res) => {
   if (!roNumber && !phone) return res.json({ ...base, found: false, match_count: 0, reason: "missing_input" });
 
   try {
-    const body = roNumber ? await searchByRoNumber(roNumber) : await searchByPhone(phone);
-    const results = body?.data?.results ?? [];
+    let results, via = "ro_number";
+    if (roNumber) results = (await searchByRoNumber(roNumber))?.data?.results ?? [];
+    else ({ results, via } = await findByPhone(phone));
+    base.via = via;
 
     if (results.length === 0) return res.json({ ...base, found: false, match_count: 0, reason: "no_match", ro_number: roNumber, phone });
 
@@ -221,12 +290,24 @@ async function selfCheck(phone) {
   } catch (e) {
     out.open_ro_search = { ok: false, error: e.message, tekion_status: e.status, body: e.body };
   }
+  try {
+    const entries = await buildPhoneIndex();
+    const withPhone = entries.find((e) => e.phones.length);
+    out.customer_index = { ok: true, open_ros: entries.length, with_phones: entries.filter((e) => e.phones.length).length };
+    if (withPhone) {
+      const probe = withPhone.phones[0];
+      const r = await searchByPhone(probe);
+      out.text_search_indexes_phone = (r?.data?.results ?? []).length > 0;
+      out.probe_ro = withPhone.ro.documentNumber;
+    }
+  } catch (e) {
+    out.customer_index = { ok: false, error: e.message, tekion_status: e.status, body: e.body };
+  }
   const p = normalizePhone(phone);
   if (p) {
     try {
-      const r = await searchByPhone(p);
-      const results = r?.data?.results ?? [];
-      out.phone_search = { ok: true, phone: p, matches: results.length, ro_numbers: results.map((x) => x.documentNumber) };
+      const { results, via } = await findByPhone(p);
+      out.phone_search = { ok: true, phone: p, via, matches: results.length, ro_numbers: results.map((x) => x.documentNumber) };
     } catch (e) {
       out.phone_search = { ok: false, error: e.message, tekion_status: e.status, body: e.body };
     }
