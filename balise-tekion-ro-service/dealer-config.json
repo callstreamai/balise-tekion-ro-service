@@ -1,0 +1,337 @@
+{
+  "_purpose": "Per-dealer scheduling rules for the Ava voice agent. Edit and redeploy; no code change needed. Null means unknown. Items marked NEEDS_APPROVAL were set to safe defaults and should be confirmed by the dealership.",
+  "dealerId": "baliseautogroup_7772_0",
+  "dealerName": "Balise Nissan of Warwick",
+  "timezone": "America/New_York",
+  "address": "1350 Post Road, Warwick, Rhode Island 02888",
+  "phones": {
+    "service": "401-785-8938",
+    "parts": "401-785-8941",
+    "sales": "401-352-5908"
+  },
+  "hours": {
+    "_source": "balisenissanri.com hours page, read 2026-09-16. NissanUSA's listing shows 8 to 5 and 8 to 2; confirm with the store.",
+    "service": {
+      "mon": ["07:30", "17:00"],
+      "tue": ["07:30", "17:00"],
+      "wed": ["07:30", "17:00"],
+      "thu": ["07:30", "17:00"],
+      "fri": ["07:30", "17:00"],
+      "sat": ["07:30", "16:00"],
+      "sun": null
+    },
+    "sales": {
+      "mon": ["09:00", "19:00"],
+      "tue": ["09:00", "19:00"],
+      "wed": ["09:00", "19:00"],
+      "thu": ["09:00", "19:00"],
+      "fri": ["09:00", "19:00"],
+      "sat": ["08:30", "18:00"],
+      "sun": null
+    },
+    "parts": {
+      "mon": ["07:30", "17:00"],
+      "tue": ["07:30", "17:00"],
+      "wed": ["07:30", "17:00"],
+      "thu": ["07:30", "17:00"],
+      "fri": ["07:30", "17:00"],
+      "sat": ["07:30", "16:00"],
+      "sun": null
+    }
+  },
+  "amenities": [
+    "comfortable waiting area",
+    "complimentary Wi-Fi",
+    "Express Service for oil changes and quick maintenance",
+    "factory-trained Nissan technicians",
+    "Nissan One to One Rewards",
+    "Service Now Pay Later financing"
+  ],
+  "customerApiVersion": "v3.1.0",
+  "booking": {
+    "horizonDays": 30,
+    "allowSameDay": false,
+    "minimumLeadTimeMinutes": 120,
+    "offerCount": 3,
+    "defaultSearchDays": 7,
+    "slotOpcodeField": "auto",
+    "_slotOpcodeField": "auto | opcode | opcodes. The spec schema says opcode, the sample says opcodes; auto probes once at startup using the free Slots API.",
+    "serviceAdvisorIdField": "auto",
+    "_serviceAdvisorIdField": "auto | employeeDisplayNumber | employeeId | id. auto probes at startup.",
+    "defaultServiceAdvisorId": null,
+    "allowedServiceAdvisorIds": null,
+    "allowedShopIds": null,
+    "notifyCustomerOnCreate": true,
+    "notifyCustomerOnUpdate": true,
+    "cancelNotifyFlagValue": false,
+    "_cancelNotifyFlagValue": "Sent as donotNotifyCustomer. Field name and description conflict in the spec; false is safe under either reading. NEEDS_APPROVAL.",
+    "updateTimestampFormat": "epoch",
+    "_updateTimestampFormat": "epoch | iso. Schema says int64 epoch ms; the sample shows an ISO string.",
+    "rescheduleJobsMode": "updatedJobs",
+    "_rescheduleJobsMode": "updatedJobs (existing jobs sent with ids in updatedJobs, jobs=[]) | jobs (existing jobs re-sent in jobs without ids). Verify jobs are preserved in a test reschedule.",
+    "mileageInComments": true,
+    "_mileageInComments": "Vehicle Update has no mileage field. The reported mileage is written into customerComments so the advisor sees it at check-in."
+  },
+  "pricing": {
+    "quotePolicy": "none",
+    "_quotePolicy": "none: the agent never quotes prices. postTaxTotalAmount is computed from the opcode catalog's flat prices where present, otherwise 0.",
+    "unpricedServiceHandling": "zero"
+  },
+  "transportation": {
+    "_note": "Names are matched case-insensitively against the dealer's Tekion transportation catalog. First match wins. The agent only offers types listed here. NEEDS_APPROVAL for loaner/shuttle eligibility.",
+    "options": [
+      {
+        "key": "wait",
+        "spoken": "wait at the dealership",
+        "callerPhrases": ["wait", "waiting", "stay", "hang out", "waiting room"],
+        "catalogNames": ["wait", "waiter", "waiting"],
+        "default": true
+      },
+      {
+        "key": "drop",
+        "spoken": "drop the vehicle off",
+        "callerPhrases": ["drop", "drop off", "leave it", "leave the car"],
+        "catalogNames": ["drop", "drop off", "drop-off", "dropoff"]
+      },
+      {
+        "key": "shuttle",
+        "spoken": "use the shuttle",
+        "callerPhrases": ["shuttle", "ride", "ride home", "ride to work"],
+        "catalogNames": ["shuttle"],
+        "requiresAdvisor": false
+      },
+      {
+        "key": "loaner",
+        "spoken": "get a loaner vehicle",
+        "callerPhrases": ["loaner", "rental", "courtesy car", "loan car"],
+        "catalogNames": ["loaner", "rental", "courtesy"],
+        "requiresAdvisor": true,
+        "_requiresAdvisor": "Loaner availability is not guaranteed by the Transportation API; the advisor confirms."
+      }
+    ]
+  },
+  "services": {
+    "_note": "Approved phone-bookable menu. opcode null means: resolve at startup by searching the dealer's Tekion opcode catalog with descriptionContains (first active match). Anything the caller asks for that does not match a menu item is booked as a custom concern (Tekion's customConcern opcode) with the caller's words as the job concern, unless allowCustomConcern is false. NEEDS_APPROVAL: Balise to confirm the 15 to 20 opcodes and which services require an advisor.",
+    "allowCustomConcern": true,
+    "customConcernRequiresAdvisor": false,
+    "menu": [
+      {
+        "key": "oil_change",
+        "spoken": "an oil change",
+        "callerPhrases": [
+          "oil",
+          "oil change",
+          "lube",
+          "oil and filter",
+          "synthetic",
+          "maintenance",
+          "regular service",
+          "routine service",
+          "service due",
+          "tune up",
+          "checkup",
+          "check up",
+          "due for service"
+        ],
+        "opcode": null,
+        "descriptionContains": ["oil change", "lof", "lube oil filter", "oil & filter", "oil and filter"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "tire_rotation",
+        "spoken": "a tire rotation",
+        "callerPhrases": ["rotate", "rotation", "tire rotation"],
+        "opcode": null,
+        "descriptionContains": ["rotat"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "multi_point",
+        "spoken": "a multi-point inspection",
+        "callerPhrases": ["inspection", "check over", "look over", "multi point", "multipoint"],
+        "opcode": null,
+        "descriptionContains": ["multi point", "multi-point", "mpi"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "brakes",
+        "spoken": "a brake inspection",
+        "callerPhrases": ["brake", "brakes", "squeak", "squeal", "grinding", "pads", "rotors"],
+        "opcode": null,
+        "descriptionContains": ["brake insp", "brake check", "inspect brake"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "battery",
+        "spoken": "a battery test",
+        "callerPhrases": ["battery", "won't start", "slow start", "dead battery", "jump"],
+        "opcode": null,
+        "descriptionContains": ["battery"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "alignment",
+        "spoken": "a wheel alignment check",
+        "callerPhrases": ["alignment", "pulling", "pulls to the", "steering", "crooked", "off center"],
+        "opcode": null,
+        "descriptionContains": ["alignment"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "tires",
+        "spoken": "tire service",
+        "callerPhrases": ["tire", "tires", "flat", "tire pressure", "tpms", "new tires", "balance", "vibration"],
+        "opcode": null,
+        "descriptionContains": ["tire insp", "tire check", "tire pressure", "tpms", "tire bal", "mount"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "wipers",
+        "spoken": "wiper blade replacement",
+        "callerPhrases": ["wiper", "wipers", "blades"],
+        "opcode": null,
+        "descriptionContains": ["wiper"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "cabin_filter",
+        "spoken": "a cabin air filter",
+        "callerPhrases": ["cabin filter", "cabin air", "smell in the vents", "air filter"],
+        "opcode": null,
+        "descriptionContains": ["cabin"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "coolant",
+        "spoken": "a coolant service",
+        "callerPhrases": ["coolant", "antifreeze", "overheating", "radiator"],
+        "opcode": null,
+        "descriptionContains": ["coolant"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "transmission",
+        "spoken": "a transmission service",
+        "callerPhrases": ["transmission", "cvt", "shifting", "slipping"],
+        "opcode": null,
+        "descriptionContains": ["transmission", "cvt"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "state_inspection",
+        "spoken": "a Rhode Island state inspection",
+        "callerPhrases": ["state inspection", "inspection sticker", "sticker", "emissions"],
+        "opcode": null,
+        "descriptionContains": ["state insp", "ri insp", "sticker"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "recall",
+        "spoken": "a recall or campaign repair",
+        "callerPhrases": ["recall", "campaign", "letter from nissan", "safety notice"],
+        "opcode": null,
+        "descriptionContains": ["recall"],
+        "requiresAdvisor": true,
+        "type": "RECALL",
+        "_requiresAdvisor": "Website says recall customers should call so parts can be confirmed."
+      },
+      {
+        "key": "check_engine",
+        "spoken": "a check engine light diagnosis",
+        "callerPhrases": ["check engine", "engine light", "warning light", "light on the dash", "diagnostic", "diagnose"],
+        "opcode": null,
+        "descriptionContains": ["check engine", "diagnos"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      },
+      {
+        "key": "ac",
+        "spoken": "an air conditioning check",
+        "callerPhrases": ["ac", "a c", "air conditioning", "not cold", "heat not working", "heater"],
+        "opcode": null,
+        "descriptionContains": ["a/c", "air cond", "hvac"],
+        "requiresAdvisor": false,
+        "type": "DEFAULT"
+      }
+    ]
+  },
+  "policies": {
+    "arrivalInstructions": "Please arrive about ten minutes early and pull into the service drive at 1350 Post Road; an advisor will meet you.",
+    "cancellationPolicy": "Appointments can be cancelled or moved any time before the visit; there is no fee.",
+    "transferDestination": "DID_TBD_BALISE_SERVICE"
+  },
+  "symptomGuide": {
+    "_note": "Spoken guidance for common complaints. The agent must never diagnose or quote a repair; it names common possibilities in plain language, states the safety note, and offers to book. Edit freely.",
+    "entries": [
+      {
+        "phrases": ["pulling to the", "pulls to the", "drifts", "veers"],
+        "spoken": "A vehicle that pulls to one side at speed is most often tire pressure or wear, or the wheel alignment. It can also be a brake issue. It is worth having looked at soon rather than driving on it for long. I can book an alignment and tire check.",
+        "suggestService": "alignment"
+      },
+      {
+        "phrases": ["vibrat", "shak", "wobble"],
+        "spoken": "A shake or vibration usually points to tire balance or wear, or sometimes brake rotors if it happens when braking. The technicians can pin it down with a road test and inspection. I can book a tire and brake check.",
+        "suggestService": "tires"
+      },
+      {
+        "phrases": ["squeak", "squeal", "grind", "brake noise"],
+        "spoken": "Squealing or grinding when braking is usually the brake pads reaching their wear indicator, or a worn rotor. Grinding especially should be looked at promptly. I can book a brake inspection.",
+        "suggestService": "brakes"
+      },
+      {
+        "phrases": ["check engine", "engine light", "warning light"],
+        "spoken": "A steady check engine light means the car has stored a code that needs to be read; it is safe to drive to the dealership. If the light is flashing, or the car is running rough, please avoid driving it and we can help arrange a tow. I can book a diagnostic visit.",
+        "suggestService": "check_engine"
+      },
+      {
+        "phrases": ["won't start", "wont start", "slow to start", "clicking", "dead"],
+        "spoken": "A slow or clicking start is most commonly the battery or a connection, though the starter can also be the cause. If it is starting now, I can book a battery and charging test. If it will not start at all, I can connect you to the service team about a tow.",
+        "suggestService": "battery"
+      },
+      {
+        "phrases": ["overheat", "temperature", "steam", "coolant smell", "sweet smell"],
+        "spoken": "Overheating should not be driven on; it can damage the engine. If the temperature gauge is high, please pull over safely and let me connect you to the service team. If it was a one-time reading, I can book a cooling system check.",
+        "suggestService": "coolant"
+      },
+      {
+        "phrases": ["smell", "burning", "smoke"],
+        "spoken": "A burning smell or smoke is something the technicians should see soon, and if there is visible smoke please do not keep driving it. I can connect you to the service team now, or book the earliest inspection.",
+        "suggestService": null
+      },
+      {
+        "phrases": ["noise", "clunk", "knock", "rattle", "hum", "whine"],
+        "spoken": "Noises are hard to place over the phone; the technicians will road test the vehicle to reproduce it. If you can note when it happens, such as turning, braking, or over bumps, that helps the advisor. I can book an inspection.",
+        "suggestService": "multi_point"
+      },
+      {
+        "phrases": ["tire pressure", "tpms", "low tire", "flat"],
+        "spoken": "A tire pressure light usually means one tire is low; temperature swings can trigger it too. Checking the pressures is the first step, and if a tire keeps losing air it may have a puncture. I can book a tire check.",
+        "suggestService": "tires"
+      },
+      {
+        "phrases": ["ac", "air conditioning", "not cold", "not blowing cold", "heat"],
+        "spoken": "Air that is not cold is often low refrigerant or a component in the system, and the technicians can test it. I can book an air conditioning check.",
+        "suggestService": "ac"
+      },
+      {
+        "phrases": ["how often", "when should i", "maintenance schedule", "due for"],
+        "spoken": "Nissan's maintenance schedule varies by model and mileage; the service advisor can pull the exact schedule for your vehicle. Most vehicles are due for an oil change and inspection every five to seven thousand miles or six months. I can book a maintenance visit.",
+        "suggestService": "oil_change"
+      }
+    ]
+  },
+  "approvedBy": null,
+  "approvedAt": null
+}
