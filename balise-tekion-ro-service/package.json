@@ -1,10 +1,18 @@
 {
   "name": "balise-tekion-ro-service",
-  "version": "1.0.0",
-  "description": "Bland webhook backend: looks up Tekion repair order status for Balise Nissan of Warwick",
+  "version": "2.0.0",
+  "description": "Bland webhook backend for Balise Nissan of Warwick on Tekion: repair order status, scheduling, rescheduling, cancellation",
   "type": "module",
   "main": "server.js",
-  "engines": { "node": ">=20" },
-  "scripts": { "start": "node server.js" },
-  "dependencies": { "express": "^4.19.2" }
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "build:pathway": "node pathway/build-pathway.mjs"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
 }
