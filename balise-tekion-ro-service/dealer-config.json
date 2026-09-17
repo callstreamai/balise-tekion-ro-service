@@ -1,7 +1,7 @@
 {
   "_purpose": "Per-store operational settings only. Everything a caller can ask about (location, amenities, policies, symptom explanations) lives in the store's Bland knowledge base and pathway variables, not here. Set DEALER_CONFIG_JSON in the service's environment to override this file without a code change; the same keys apply. Anything not set falls back to service-defaults.json.",
   "dealerId": "baliseautogroup_7772_0",
-  "dealerName": "Balise Nissan of Warwick",
+  "dealerName": "Balise Toyota of Warwick",
   "timezone": "America/New_York",
   "hours": {
     "service": {
@@ -22,9 +22,10 @@
   "services": {
     "menuOverrides": {
       "state_inspection": { "spoken": "a Rhode Island state inspection", "descriptionContains": ["state insp", "ri insp", "sticker"] },
-      "recall": { "callerPhrases": ["recall", "campaign", "letter from nissan", "safety notice"] }
+      "recall": { "callerPhrases": ["recall", "campaign", "letter from toyota", "safety notice"] }
     },
     "menuExclude": [],
     "menuAdd": []
-  }
+  },
+  "defaultMake": "Toyota"
 }
