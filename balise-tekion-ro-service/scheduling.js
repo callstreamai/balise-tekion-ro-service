@@ -238,6 +238,16 @@ const offers = [];
   return { offers, requestedDayUnavailable, requestedDay, totalAvailable: all.length, meta: { shopId: shop.id, transportId, advisorId, startDate, endDate, opcodes, slotOpcodeField: catalog.detected.slotOpcodeField ?? B.slotOpcodeField, advisorField: catalog.detected.advisorField ?? B.serviceAdvisorIdField } };
 }
 
+// Start the slot search in the background as soon as services are known, so the times are ready by the time
+// the caller has answered the mileage and transportation questions. /slots reuses the result when it still applies.
+function prewarmSlots(s) {
+  const opt = s.transportation?.opt ?? config.transportation.options.find((o) => o.default);
+  const key = `${opt.key}|asap|${(s.services ?? []).map((x) => x.opcode).join(",")}`;
+  if (s.prewarm?.key === key) return;
+  const snapshot = { ...s, transportation: s.transportation ?? { key: opt.key, opt, cat: transportationByKey(opt.key).cat } };
+  s.prewarm = { key, startedAt: Date.now(), promise: findSlots(snapshot, parsePreference("", tz)).catch((e) => ({ error: e })) };
+}
+
 // ---- customers -------------------------------------------------------------------------
 const VERSION = config.customerApiVersion || "v3.1.0";
 async function searchCustomersByPhone(phone10) {
@@ -567,6 +577,7 @@ r.post("/services", wrap(async (s, b, res, base) => {
   const requiresAdvisor = services.some((x) => x.requiresAdvisor) || unresolved.some((x) => x.requiresAdvisor);
   const hint = (config.symptomHints?.entries ?? []).find((e) => e.phrases.some((p) => lc(text).includes(lc(p))));
   console.log("[services]", JSON.stringify({ via: picked.length ? "opcode_picks" : usedCustom ? "custom_concern" : "menu", opcodes: services.map((x) => x.opcode), requires_advisor: requiresAdvisor }));
+  if (!requiresAdvisor) prewarmSlots(s);
   return res.json({
     ...base, ok: true, bookable: !requiresAdvisor, requires_advisor: requiresAdvisor, used_custom_concern: usedCustom,
     services_spoken: usedCustom ? "an inspection for the concern you described" : servicesSpoken(services),
@@ -586,7 +597,14 @@ r.post("/slots", wrap(async (s, b, res, base) => {
   } else if (!s.transportation && !s.existingAppointment) { const opt = config.transportation.options.find((o) => o.default); s.transportation = { key: opt.key, opt, cat: transportationByKey(opt.key).cat }; }
   // No stated preference means the soonest openings; a day mentioned in the caller's opening request counts as a preference.
   const pref = parsePreference(b.preferred_text || b.initial_request || "", tz);
-  const result = await findSlots(s, pref);
+  const wantKey = `${s.transportation?.key}|asap|${(s.services ?? []).map((x) => x.opcode).join(",")}`;
+  let result = null;
+  if (s.prewarm && s.prewarm.key === wantKey && !pref.dayEpoch && !pref.rangeStart && pref.hour === null && !pref.timeOfDay) {
+    const r = await s.prewarm.promise;
+    if (r && !r.error) { result = r; console.log("[slots] prewarmed result used", JSON.stringify({ waited_ms: Date.now() - s.prewarm.startedAt })); }
+  }
+  if (!result) result = await findSlots(s, pref);
+  s.prewarm = null;
   s.offers = result.offers; s.slotMeta = result.meta; s.preference = pref.raw;
   const spokenOffers = result.offers.map((o) => tz.spokenDateTime(o.startTime));
   return res.json({
