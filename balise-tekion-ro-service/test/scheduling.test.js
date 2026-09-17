@@ -176,6 +176,15 @@ test("opcode picks: the model chooses from the store's real list, service matche
   assert.equal(bad.json.matched_via, "custom_concern", "a pick that is not on the list is ignored, never invented");
 });
 
+test("soonest openings: no preference uses the pre-warmed search", async () => {
+  const call = "call-prewarm";
+  await post("/schedule/identify", { call_id: call, phone: "4013007450" });
+  await post("/schedule/services", { call_id: call, services_text: "oil change" });
+  await new Promise((r) => setTimeout(r, 150));
+  const slots = await post("/schedule/slots", { call_id: call, transportation_choice: "wait", mileage: "30000" });
+  assert.equal(slots.json.found, true); assert.equal(slots.json.options_count, 3); assert.equal(slots.json.requested_day_unavailable, false);
+});
+
 test("dealer config: env override and menu tweaks merge over defaults", async () => {
   const { loadDealerConfig } = await import("../dealer.js");
   process.env.DEALER_CONFIG_JSON = JSON.stringify({ dealerName: "Test Motors", hours: { service: { sun: ["09:00", "12:00"] } }, booking: { allowSameDay: true }, services: { menuExclude: ["wipers"], menuOverrides: { oil_change: { spoken: "a synthetic oil service" } }, menuAdd: [{ key: "detail", spoken: "a detail", callerPhrases: ["detail"], descriptionContains: ["detail"] }] } });
