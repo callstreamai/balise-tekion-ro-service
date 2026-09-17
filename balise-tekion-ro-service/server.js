@@ -13,12 +13,13 @@ import { tekion, getToken, resetToken, TEKION_BASE, tokenState } from "./tekion.
 import { buildApptIndex, vehiclesForPhone, normalizePhone, spokenVehicle, startRefreshLoop, getIndex } from "./appointment-index.js";
 import { schedulingRouter, loadCatalog, catalog, config } from "./scheduling.js";
 
-const { TEKION_APP_ID, TEKION_SECRET_KEY, TEKION_DEALER_ID, WEBHOOK_SECRET, DEALER_NAME = config.dealerName || "Balise Nissan of Warwick", PORT = 10000 } = process.env;
+const { TEKION_APP_ID, TEKION_SECRET_KEY, TEKION_DEALER_ID, WEBHOOK_SECRET, PORT = 10000 } = process.env;
+const DEALER_NAME = config.dealerName;
 
 for (const k of ["TEKION_APP_ID", "TEKION_SECRET_KEY", "TEKION_DEALER_ID", "WEBHOOK_SECRET"]) {
   if (!process.env[k]) console.warn(`[startup] missing env var ${k}`);
 }
-if (TEKION_DEALER_ID && config.dealerId && TEKION_DEALER_ID !== config.dealerId) console.warn(`[startup] TEKION_DEALER_ID ${TEKION_DEALER_ID} differs from dealer-config.json ${config.dealerId}`);
+console.log("[config]", JSON.stringify({ source: config._source, dealer: config.dealerName, dealerId: config.dealerId, timezone: config.timezone, menu_items: config.services.menu.length }));
 
 // Plain-language meaning per Tekion RO status enum. This is the only text the agent speaks about status.
 const SPOKEN = {
