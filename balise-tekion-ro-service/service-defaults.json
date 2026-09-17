@@ -1,0 +1,81 @@
+{
+  "_purpose": "Built-in defaults shared by every dealer. A dealer config (DEALER_CONFIG_JSON env var, or dealer-config.json) only needs to override what differs. Menu items are matched against the dealer's live Tekion opcode catalog at startup, so no opcode codes live here.",
+  "timezone": "America/New_York",
+  "customerApiVersion": "v3.1.0",
+  "hours": {
+    "service": {
+      "mon": ["07:30", "17:00"],
+      "tue": ["07:30", "17:00"],
+      "wed": ["07:30", "17:00"],
+      "thu": ["07:30", "17:00"],
+      "fri": ["07:30", "17:00"],
+      "sat": ["08:00", "16:00"],
+      "sun": null
+    }
+  },
+  "booking": {
+    "horizonDays": 30,
+    "allowSameDay": false,
+    "minimumLeadTimeMinutes": 120,
+    "offerCount": 3,
+    "defaultSearchDays": 7,
+    "slotOpcodeField": "auto",
+    "serviceAdvisorIdField": "auto",
+    "defaultServiceAdvisorId": null,
+    "allowedServiceAdvisorIds": null,
+    "allowedShopIds": null,
+    "notifyCustomerOnCreate": true,
+    "notifyCustomerOnUpdate": true,
+    "cancelNotifyFlagValue": false,
+    "updateTimestampFormat": "epoch",
+    "rescheduleJobsMode": "updatedJobs",
+    "mileageInComments": true
+  },
+  "pricing": { "quotePolicy": "none", "unpricedServiceHandling": "zero" },
+  "transportation": {
+    "options": [
+      { "key": "wait", "spoken": "wait at the dealership", "callerPhrases": ["wait", "waiting", "stay", "hang out", "waiting room"], "catalogNames": ["wait", "waiter", "waiting"], "default": true },
+      { "key": "drop", "spoken": "drop the vehicle off", "callerPhrases": ["drop", "drop off", "leave it", "leave the car"], "catalogNames": ["self", "drop", "drop off", "drop-off", "dropoff"] },
+      { "key": "shuttle", "spoken": "use the shuttle", "callerPhrases": ["shuttle", "ride", "ride home", "ride to work"], "catalogNames": ["shuttle"], "requiresAdvisor": false },
+      { "key": "loaner", "spoken": "get a loaner vehicle", "callerPhrases": ["loaner", "rental", "courtesy car", "loan car"], "catalogNames": ["loaner", "rental", "courtesy"], "requiresAdvisor": true }
+    ]
+  },
+  "services": {
+    "allowCustomConcern": true,
+    "customConcernRequiresAdvisor": false,
+    "spokenFromCatalog": false,
+    "_spokenFromCatalog": "false: use the generic spoken names below. true: speak the dealer's own Tekion opcode description (title-cased) instead.",
+    "menu": [
+      { "key": "oil_change", "spoken": "an oil change", "callerPhrases": ["oil", "oil change", "lube", "oil and filter", "synthetic", "maintenance", "regular service", "routine service", "service due", "tune up", "checkup", "check up", "due for service"], "descriptionContains": ["oil change", "lof", "lube oil filter", "oil & filter", "oil and filter"] },
+      { "key": "tire_rotation", "spoken": "a tire rotation", "callerPhrases": ["rotate", "rotation", "tire rotation"], "descriptionContains": ["rotat"] },
+      { "key": "multi_point", "spoken": "a multi-point inspection", "callerPhrases": ["inspection", "check over", "look over", "multi point", "multipoint"], "descriptionContains": ["multi point", "multi-point", "mpi"] },
+      { "key": "brakes", "spoken": "a brake inspection", "callerPhrases": ["brake", "brakes", "squeak", "squeal", "grinding", "pads", "rotors"], "descriptionContains": ["brake insp", "brake check", "inspect brake"] },
+      { "key": "battery", "spoken": "a battery test", "callerPhrases": ["battery", "won't start", "slow start", "dead battery", "jump"], "descriptionContains": ["battery"] },
+      { "key": "alignment", "spoken": "a wheel alignment check", "callerPhrases": ["alignment", "pulling", "pulls to the", "steering", "crooked", "off center"], "descriptionContains": ["alignment"] },
+      { "key": "tires", "spoken": "tire service", "callerPhrases": ["tire", "tires", "flat", "tire pressure", "tpms", "new tires", "balance", "vibration"], "descriptionContains": ["tire insp", "tire check", "tire pressure", "tpms", "tire bal", "mount"] },
+      { "key": "wipers", "spoken": "wiper blade replacement", "callerPhrases": ["wiper", "wipers", "blades"], "descriptionContains": ["wiper"] },
+      { "key": "cabin_filter", "spoken": "a cabin air filter", "callerPhrases": ["cabin filter", "cabin air", "smell in the vents", "air filter"], "descriptionContains": ["cabin"] },
+      { "key": "coolant", "spoken": "a coolant service", "callerPhrases": ["coolant", "antifreeze", "overheating", "radiator"], "descriptionContains": ["coolant"] },
+      { "key": "transmission", "spoken": "a transmission service", "callerPhrases": ["transmission", "cvt", "shifting", "slipping"], "descriptionContains": ["transmission", "cvt"] },
+      { "key": "state_inspection", "spoken": "a state inspection", "callerPhrases": ["state inspection", "inspection sticker", "sticker", "emissions"], "descriptionContains": ["state insp", "sticker"] },
+      { "key": "recall", "spoken": "a recall or campaign repair", "callerPhrases": ["recall", "campaign", "safety notice"], "descriptionContains": ["recall"], "requiresAdvisor": true, "type": "RECALL" },
+      { "key": "check_engine", "spoken": "a check engine light diagnosis", "callerPhrases": ["check engine", "engine light", "warning light", "light on the dash", "diagnostic", "diagnose"], "descriptionContains": ["check engine", "diagnos"] },
+      { "key": "ac", "spoken": "an air conditioning check", "callerPhrases": ["ac", "a c", "air conditioning", "not cold", "heat not working", "heater"], "descriptionContains": ["a/c", "air cond", "hvac"] }
+    ]
+  },
+  "symptomHints": {
+    "_purpose": "Maps what a caller describes to the menu item to book. The spoken explanation of each symptom lives in the Bland knowledge base, not here.",
+    "entries": [
+      { "phrases": ["pulling to the", "pulls to the", "drifts", "veers"], "suggestService": "alignment" },
+      { "phrases": ["vibrat", "shak", "wobble"], "suggestService": "tires" },
+      { "phrases": ["squeak", "squeal", "grind", "brake noise"], "suggestService": "brakes" },
+      { "phrases": ["check engine", "engine light", "warning light"], "suggestService": "check_engine" },
+      { "phrases": ["won't start", "wont start", "slow to start", "clicking"], "suggestService": "battery" },
+      { "phrases": ["overheat", "temperature", "steam", "coolant smell"], "suggestService": "coolant" },
+      { "phrases": ["noise", "clunk", "knock", "rattle", "hum", "whine"], "suggestService": "multi_point" },
+      { "phrases": ["tire pressure", "tpms", "low tire", "flat"], "suggestService": "tires" },
+      { "phrases": ["air conditioning", "not cold", "not blowing cold"], "suggestService": "ac" },
+      { "phrases": ["how often", "maintenance schedule", "due for"], "suggestService": "oil_change" }
+    ]
+  }
+}
