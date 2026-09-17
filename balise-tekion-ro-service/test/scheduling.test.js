@@ -152,7 +152,7 @@ test("knowledge answers", async () => {
 test("call-context: spoken variables derived from live catalog and hours", async () => {
   const r = await fetch(`${base}/schedule/call-context`, { headers: { authorization: `Bearer ${SECRET}` } });
   const j = await r.json();
-  assert.equal(j.ok, true); assert.equal(j.dealer_name, "Balise Nissan of Warwick");
+  assert.equal(j.ok, true); assert.equal(j.dealer_name, "Balise Toyota of Warwick"); assert.match(j.now_spoken, / at /);
   assert.match(j.service_hours_spoken, /Monday through Friday 7:30 AM to 5 PM/);
   assert.match(j.menu_spoken, /an oil change/); assert.match(j.menu_spoken, /a tire rotation/); assert.doesNotMatch(j.menu_spoken, /wiper/, "unresolved opcodes are not offered");
   assert.equal(j.menu_count, "6"); assert.equal(j.catalog_ok, "true"); assert.equal(j.custom_concern_available, "true");
