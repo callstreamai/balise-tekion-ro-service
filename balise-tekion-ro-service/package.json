@@ -1,6 +1,6 @@
 {
   "name": "balise-tekion-ro-service",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Bland webhook backend for Balise Nissan of Warwick on Tekion: repair order status, scheduling, rescheduling, cancellation",
   "type": "module",
   "main": "server.js",
