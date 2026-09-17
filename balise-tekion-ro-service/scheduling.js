@@ -43,6 +43,7 @@ setInterval(() => { const cut = Date.now() - SESSION_TTL_MS; for (const [k, s] o
 // ---- catalog -------------------------------------------------------------------------
 export const catalog = { loadedAt: 0, shops: [], transportation: [], advisors: [], opcodes: [], customConcern: null, menu: [], error: null, detected: {} };
 const CATALOG_TTL_MS = 6 * 3600 * 1000;
+const CATALOG_RETRY_MS = 10 * 60 * 1000; // after a partial failure (rate limit, outage) retry no more often than this
 let catalogInFlight = null;
 
 const lc = (s) => String(s ?? "").toLowerCase();
@@ -51,7 +52,9 @@ const clean = (v) => { const t = String(v ?? "").trim(); return !t || /^\{\{.*\}
 const includesAny = (hay, needles) => { const h = lc(hay); return (needles ?? []).some((n) => h.includes(lc(n))); };
 
 export async function loadCatalog(force = false) {
-  if (!force && Date.now() - catalog.loadedAt < CATALOG_TTL_MS && !catalog.error) return catalog;
+  const age = Date.now() - catalog.loadedAt;
+  if (!force && age < CATALOG_TTL_MS && !catalog.error) return catalog;
+  if (!force && catalog.error && age < CATALOG_RETRY_MS) return catalog;
   if (catalogInFlight) return catalogInFlight;
   catalogInFlight = (async () => {
     const errors = [];
@@ -537,6 +540,10 @@ r.post("/services", wrap(async (s, b, res, base) => {
   const services = hits.filter((m) => m.opcode && !seenOp.has(m.opcode) && seenOp.add(m.opcode));
   const unresolved = hits.filter((m) => !m.opcode);
   let usedCustom = false;
+  if (!services.length && !catalog.opcodes.length) {
+    console.log("[services] not bookable", JSON.stringify({ reason: "catalog_unavailable", text: text.slice(0, 120), catalog_error: (catalog.error ?? "").slice(0, 160) }));
+    return res.json({ ...base, ok: true, bookable: false, reason: "catalog_unavailable", services_spoken: "" });
+  }
   if (!services.length) {
     if (config.services.allowCustomConcern && catalog.customConcern?.opcode) {
       services.push({ key: "custom", custom: true, spoken: "the concern you described", opcode: catalog.customConcern.opcode, opcodeDescription: catalog.customConcern.description ?? "Customer concern", concern: text, requiresAdvisor: config.services.customConcernRequiresAdvisor, type: "DEFAULT" });
@@ -567,7 +574,8 @@ r.post("/slots", wrap(async (s, b, res, base) => {
     const { cat } = transportationByKey(opt.key);
     s.transportation = { key: opt.key, opt, cat };
   } else if (!s.transportation && !s.existingAppointment) { const opt = config.transportation.options.find((o) => o.default); s.transportation = { key: opt.key, opt, cat: transportationByKey(opt.key).cat }; }
-  const pref = parsePreference(b.preferred_text, tz);
+  // No stated preference means the soonest openings; a day mentioned in the caller's opening request counts as a preference.
+  const pref = parsePreference(b.preferred_text || b.initial_request || "", tz);
   const result = await findSlots(s, pref);
   s.offers = result.offers; s.slotMeta = result.meta; s.preference = pref.raw;
   const spokenOffers = result.offers.map((o) => tz.spokenDateTime(o.startTime));
