@@ -422,6 +422,8 @@ export function callContext(now = Date.now()) {
   return {
     dealer_name: config.dealerName,
     timezone: config.timezone,
+    now_spoken: tz.spokenDateTime(now),
+    today_spoken: tz.spokenDay(now),
     service_hours_spoken: hoursSpoken("service"),
     today_hours_spoken: today ? `${spokenClock(today[0])} to ${spokenClock(today[1])}` : "closed",
     open_now: String(openNow),
@@ -502,7 +504,7 @@ r.post("/new-customer", wrap(async (s, b, res, base, phone) => {
   const ym = vt.match(/\b(19|20)\d{2}\b/);
   const year = ym ? ym[0] : null;
   let rest = vt.replace(year ?? "", "").replace(/\b(a|an|the|my|its|it's|is)\b/gi, " ").replace(/\s+/g, " ").trim();
-  let make = "Nissan", model = rest;
+  let make = config.defaultMake || "Nissan", model = rest;
   const mk = rest.match(/^(nissan|toyota|honda|ford|chevrolet|chevy|hyundai|kia|subaru|jeep|infiniti|mazda|volkswagen|vw|bmw|mercedes|audi|lexus|acura|gmc|ram|dodge|tesla)\b\s*/i);
   if (mk) { make = mk[1]; model = rest.slice(mk[0].length).trim(); }
   if (/^chevy$/i.test(make)) make = "Chevrolet"; if (/^vw$/i.test(make)) make = "Volkswagen";
