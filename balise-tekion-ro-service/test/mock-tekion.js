@@ -46,6 +46,9 @@ const customers = [
     { opcode: "ALIGN", description: "4 WHEEL ALIGNMENT", defaultPayType: "CUSTOMER_PAY", priceDetails: [{ payType: "CUSTOMER_PAY", flatPrice: { amount: 129.99, currency: "USD" } }] },
     { opcode: "BATT", description: "BATTERY TEST", defaultPayType: "CUSTOMER_PAY" },
     { opcode: "CC", description: "CUSTOMER CONCERN", defaultPayType: "CUSTOMER_PAY" },
+    { opcode: "SUNRF", description: "SUNROOF DRAIN CLEAN & LEAK CHECK", defaultPayType: "CUSTOMER_PAY" },
+    { opcode: "60K", description: "60,000 MILE SERVICE", defaultPayType: "CUSTOMER_PAY" },
+    { opcode: "WINT", description: "INTERNAL - WARRANTY DIAG", defaultPayType: "WARRANTY" },
     ];
   app.get("/openapi/v3.1.0/opcodes", (req, res) => {
     if (req.query.customConcern === "true") return res.json({ meta: { status: "success" }, data: [opcodes.find((o) => o.opcode === "CC")] });
