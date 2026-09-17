@@ -45,7 +45,7 @@ test("full booking flow: identify -> pick vehicle -> services -> slots -> book",
      const svc = await post("/schedule/services", { call_id: call, services_text: "I need an oil change and my brakes are squeaking" });
   assert.equal(svc.json.bookable, true); assert.equal(svc.json.service_count, 2);
   assert.match(svc.json.services_spoken, /oil change/); assert.match(svc.json.services_spoken, /brake inspection/);
-  assert.match(svc.json.symptom_spoken, /wear indicator/);
+  assert.equal(svc.json.symptom_detected, true); assert.equal(svc.json.symptom_service_key, "brakes");
 
      const slots = await post("/schedule/slots", { call_id: call, transportation_choice: "I'll wait", preferred_text: "Tuesday morning", mileage: "about 42,000" });
   assert.equal(slots.json.found, true); assert.equal(slots.json.options_count, 2, "Tuesday morning: 8 and 11 (9:30 is full)");
@@ -144,7 +144,50 @@ test("knowledge answers", async () => {
   const h = await post("/schedule/answer", { question: "what are your hours on saturday" });
   assert.match(h.json.spoken, /Monday through Friday 7:30 AM to 5 PM, Saturday 7:30 AM to 4 PM, Sunday closed/);
   const w = await post("/schedule/answer", { question: "where are you located" });
-  assert.match(w.json.spoken, /1350 Post Road/);
+  assert.equal(w.json.topic, "unknown", "location is answered from the Bland KB, not the service");
   const s = await post("/schedule/answer", { question: "my car is pulling to the right at high speeds" });
-  assert.equal(s.json.topic, "symptom"); assert.equal(s.json.suggestService, "alignment");
+  assert.equal(s.json.topic, "symptom"); assert.equal(s.json.suggestService, "alignment"); assert.match(s.json.suggest_spoken, /alignment/);
+});
+
+test("call-context: spoken variables derived from live catalog and hours", async () => {
+  const r = await fetch(`${base}/schedule/call-context`, { headers: { authorization: `Bearer ${SECRET}` } });
+  const j = await r.json();
+  assert.equal(j.ok, true); assert.equal(j.dealer_name, "Balise Nissan of Warwick");
+  assert.match(j.service_hours_spoken, /Monday through Friday 7:30 AM to 5 PM/);
+  assert.match(j.menu_spoken, /an oil change/); assert.match(j.menu_spoken, /a tire rotation/); assert.doesNotMatch(j.menu_spoken, /wiper/, "unresolved opcodes are not offered");
+  assert.equal(j.menu_count, "6"); assert.equal(j.catalog_ok, "true"); assert.equal(j.custom_concern_available, "true");
+  assert.match(j.transportation_spoken, /wait at the dealership/); assert.match(j.transportation_spoken, /loaner/);
+  assert.ok(["true", "false"].includes(j.open_now));
+  const unauth = await fetch(`${base}/schedule/call-context`);
+  assert.equal(unauth.status, 401);
+});
+
+test("opcode picks: the model chooses from the store's real list, service matches exactly", async () => {
+  const ctx = await (await fetch(`${base}/schedule/call-context`, { headers: { authorization: `Bearer ${SECRET}` } })).json();
+  assert.match(ctx.opcode_options, /sunroof drain clean & leak check/); assert.match(ctx.opcode_options, /60,000 mile service/);
+  assert.doesNotMatch(ctx.opcode_options, /warranty/, "internal and warranty codes are never offered");
+  const call = "call-picks";
+  await post("/schedule/identify", { call_id: call, phone: "4016397188" });
+  await post("/schedule/select-vehicle", { call_id: call, vehicle_choice: "the Rogue" });
+  const svc = await post("/schedule/services", { call_id: call, services_text: "water is coming in around the sunroof and I'm due for the sixty thousand mile", opcode_picks: "Sunroof drain clean & leak check; 60,000 mile service" });
+  assert.equal(svc.json.bookable, true); assert.equal(svc.json.matched_via, "opcode_picks"); assert.equal(svc.json.service_count, 2);
+  assert.match(svc.json.services_spoken, /sunroof/); assert.match(svc.json.services_spoken, /60,000 mile/);
+  const bad = await post("/schedule/services", { call_id: call, services_text: "sunroof leak", opcode_picks: "Sunroof replacement (not a real option)" });
+  assert.equal(bad.json.matched_via, "custom_concern", "a pick that is not on the list is ignored, never invented");
+});
+
+test("dealer config: env override and menu tweaks merge over defaults", async () => {
+  const { loadDealerConfig } = await import("../dealer.js");
+  process.env.DEALER_CONFIG_JSON = JSON.stringify({ dealerName: "Test Motors", hours: { service: { sun: ["09:00", "12:00"] } }, booking: { allowSameDay: true }, services: { menuExclude: ["wipers"], menuOverrides: { oil_change: { spoken: "a synthetic oil service" } }, menuAdd: [{ key: "detail", spoken: "a detail", callerPhrases: ["detail"], descriptionContains: ["detail"] }] } });
+  const saveDealerId = process.env.TEKION_DEALER_ID; delete process.env.TEKION_DEALER_ID;
+  try {
+    const c = loadDealerConfig();
+    assert.equal(c.dealerName, "Test Motors"); assert.equal(c._source, "env:DEALER_CONFIG_JSON");
+    assert.deepEqual(c.hours.service.sun, ["09:00", "12:00"]); assert.deepEqual(c.hours.service.mon, ["07:30", "17:00"], "unspecified days keep defaults");
+    assert.equal(c.booking.allowSameDay, true); assert.equal(c.booking.horizonDays, 30);
+    const keys = c.services.menu.map((m) => m.key);
+    assert.ok(!keys.includes("wipers")); assert.ok(keys.includes("detail"));
+    assert.equal(c.services.menu.find((m) => m.key === "oil_change").spoken, "a synthetic oil service");
+    assert.equal(c.services.menu.find((m) => m.key === "recall").requiresAdvisor, true);
+  } finally { delete process.env.DEALER_CONFIG_JSON; if (saveDealerId) process.env.TEKION_DEALER_ID = saveDealerId; }
 });
