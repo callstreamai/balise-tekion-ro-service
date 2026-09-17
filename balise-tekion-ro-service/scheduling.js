@@ -14,16 +14,16 @@
 //   find                { phone }                      -> upcoming appointments
 //   select-appointment  { appointment_choice }
 //   cancel              { cancel_reason }
-//   answer              { question }                   -> KB answer from config (hours, location, symptoms)
+//   answer              { question }                   -> hours (everything else is answered from the Bland KB)
+//   call-context        GET or POST, no body needed    -> flat spoken variables for the pathway's call-start request
 
-import fs from "node:fs";
-import path from "node:path";
 import express from "express";
 import { tekion, getAllPages, TekionError } from "./tekion.js";
 import { makeTz, parsePreference, matchChoice } from "./timeutil.js";
 import { buildApptIndex, normalizePhone, spokenVehicle, normalizeModel } from "./appointment-index.js";
+import { loadDealerConfig } from "./dealer.js";
 
-export const config = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "dealer-config.json"), "utf8"));
+export const config = loadDealerConfig();
 export const tz = makeTz(config.timezone || "America/New_York");
 const B = config.booking;
 
@@ -66,7 +66,7 @@ export async function loadCatalog(force = false) {
     if (advisors) catalog.advisors = advisors;
     if (opcodes) catalog.opcodes = opcodes;
     // Tekion may ignore customConcern=true and return the first opcode; accept only an opcode that is clearly a concern placeholder.
-    const looksLikeConcern = (o) => /concern|complain|customer states|cust states|diagnos/i.test(`${o?.opcode} ${o?.description}`);
+                     const looksLikeConcern = (o) => /concern|complain|customer states|cust states|diagnos/i.test(`${o?.opcode} ${o?.description}`);
     const ccHit = (cc?.data ?? []).find(looksLikeConcern) ?? (opcodes ?? []).find((o) => /custom(er)? concern/i.test(o.description ?? ""));
     catalog.customConcern = ccHit ?? null;
     catalog.menu = resolveMenu(config.services.menu, catalog.opcodes);
@@ -81,15 +81,18 @@ export async function loadCatalog(force = false) {
   try { return await catalogInFlight; } finally { catalogInFlight = null; }
 }
 
+// Spoken form of a Tekion opcode description: "LUBE OIL FILTER - SYNTHETIC" -> "lube oil filter synthetic".
+export function spokenFromDescription(desc) {
+  return String(desc ?? "").toLowerCase().replace(/(\d),(\d)/g, "$1COMMA$2").replace(/[^a-z0-9/& ]+/gi, " ").replace(/COMMA/g, ",").replace(/\s+/g, " ").trim();
+}
 function resolveMenu(menu, opcodes) {
   return menu.map((m) => {
-    if (m.opcode) {
-      const hit = opcodes.find((o) => lc(o.opcode) === lc(m.opcode));
-      return { ...m, opcodeDescription: hit?.description ?? m.spoken, catalogEntry: hit ?? null };
-    }
-    const hit = opcodes.find((o) => includesAny(o.description, m.descriptionContains) && (!o.defaultPayType || o.defaultPayType === "CUSTOMER_PAY"))
+    const hit = m.opcode
+    ? opcodes.find((o) => lc(o.opcode) === lc(m.opcode))
+      : opcodes.find((o) => includesAny(o.description, m.descriptionContains) && (!o.defaultPayType || o.defaultPayType === "CUSTOMER_PAY"))
     ?? opcodes.find((o) => includesAny(o.description, m.descriptionContains));
-    return { ...m, opcode: hit?.opcode ?? null, opcodeDescription: hit?.description ?? m.spoken, catalogEntry: hit ?? null };
+    const spoken = config.services.spokenFromCatalog && hit?.description ? spokenFromDescription(hit.description) : m.spoken;
+    return { ...m, spoken, opcode: hit?.opcode ?? m.opcode ?? null, opcodeDescription: hit?.description ?? m.spoken, catalogEntry: hit ?? null };
   });
 }
 
@@ -275,12 +278,47 @@ function matchVehicle(text, vehicles) {
 }
 
 // ---- services --------------------------------------------------------------------------
+// The store's real bookable opcodes as a compact spoken-ready list. The pathway shows this to the model
+// so it can pick the closest real option in the store's own words; picks come back as exact descriptions.
+const OPCODE_EXCLUDE = /internal|warranty|sublet|shop supp|misc|do not use|dnu|inactive|test|policy|goodwill|adjust|^\W*$|^[0-9 .-]+$/i;
+export function opcodeOptions() {
+  const O = config.services.opcodeOptions ?? {};
+  const exclude = O.excludePattern ? new RegExp(O.excludePattern, "i") : OPCODE_EXCLUDE;
+  const max = Number(O.maxItems ?? 120);
+  const seen = new Set(); const out = [];
+  for (const o of catalog.opcodes) {
+    const d = String(o.description ?? "").trim();
+    if (!d || d.length < 4 || exclude.test(d)) continue;
+    if (o.defaultPayType && o.defaultPayType !== "CUSTOMER_PAY") continue;
+    if (/inactive/i.test(o.status ?? "")) continue;
+    const norm = spokenFromDescription(d);
+    if (!norm || seen.has(norm)) continue;
+    seen.add(norm); out.push({ opcode: o.opcode, description: d, norm });
+    if (out.length >= max) break;
+  }
+  return out;
+}
+// Exact-description (or exact-code) matching for picks the model made from opcodeOptions(). Never fuzzy.
+export function matchPicks(picksText) {
+  const picks = String(picksText ?? "").split(/\s*(?:;|\||\n)\s*/).map((p) => p.trim()).filter(Boolean);
+  const opts = opcodeOptions();
+  const out = [];
+  for (const p of picks) {
+    const n = spokenFromDescription(p);
+    const hit = opts.find((o) => o.norm === n) ?? opts.find((o) => lc(o.opcode) === lc(p));
+    if (!hit) continue;
+    const entry = catalog.opcodes.find((o) => o.opcode === hit.opcode);
+    const menuItem = catalog.menu.find((m) => m.opcode === hit.opcode);
+    out.push(menuItem ?? { key: `op:${hit.opcode}`, spoken: hit.norm, opcode: hit.opcode, opcodeDescription: hit.description, catalogEntry: entry ?? null, requiresAdvisor: /recall|campaign/i.test(hit.description), type: /recall|campaign/i.test(hit.description) ? "RECALL" : "DEFAULT", callerPhrases: [] });
+  }
+  return out;
+}
 function matchServices(text) {
   const t = ` ${lc(text).replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ")} `;
   const hits = [];
   for (const m of catalog.menu) if (m.callerPhrases.some((p) => t.includes(` ${lc(p)} `) || (p.length > 5 && t.includes(lc(p))))) hits.push(m);
-  // symptom guide suggestions ("pulling to the right" -> alignment)
-for (const e of config.symptomGuide?.entries ?? []) {
+  // symptom hints ("pulling to the right" -> alignment)
+for (const e of config.symptomHints?.entries ?? []) {
   if (e.suggestService && e.phrases.some((p) => t.includes(lc(p)))) { const m = catalog.menu.find((x) => x.key === e.suggestService); if (m && !hits.includes(m)) hits.push(m); }
 }
   return [...new Set(hits)];
@@ -356,15 +394,49 @@ export function hoursSpoken(dept = "service") {
 export function answerQuestion(question) {
   const q = lc(question);
   if (/\bhour|\bopen\b|\bclose|what time|until when|are you open/.test(q)) {
-    const dept = /\bsales\b/.test(q) ? "sales" : /\bparts\b/.test(q) ? "parts" : "service";
+    const dept = ["sales", "parts"].find((d) => new RegExp(`\\b${d}\\b`).test(q) && config.hours?.[d]) ?? "service";
     return { topic: "hours", spoken: `The ${dept} department is open ${hoursSpoken(dept)}.` };
   }
-  if (/where|located|location|address|directions|how do i get|find you/.test(q)) return { topic: "location", spoken: `We are at ${config.address}. If you are using GPS, search for ${config.dealerName}.` };
-  if (/phone number|call (the )?(service|parts|sales)|number for/.test(q)) return { topic: "phone", spoken: `The service department's direct number is ${config.phones.service.split("-").join(" ")}.` };
-  if (/wifi|wait(ing)? (room|area)|coffee|amenit|while i wait|shuttle|loaner|rental|express/.test(q)) return { topic: "amenities", spoken: `While you wait we have ${listSpoken(config.amenities).replace(", or ", ", and ")}. Shuttle and loaner availability depends on the day, and the service advisor confirms it when you book.` };
-  if (/cancel(lation)? (policy|fee)|fee for|charge for cancel|late fee/.test(q)) return { topic: "policy", spoken: config.policies.cancellationPolicy };
-  for (const e of config.symptomGuide?.entries ?? []) if (e.phrases.some((p) => q.includes(lc(p)))) return { topic: "symptom", spoken: e.spoken, suggestService: e.suggestService };
+  const hint = (config.symptomHints?.entries ?? []).find((e) => e.phrases.some((p) => q.includes(lc(p))));
+  if (hint) return { topic: "symptom", spoken: "", suggestService: hint.suggestService, suggest_spoken: catalog.menu.find((m) => m.key === hint.suggestService)?.spoken ?? "" };
   return { topic: "unknown", spoken: "" };
+}
+
+// Flat, spoken-ready variables for the pathway's call-start request. Everything here is derived from
+// live Tekion data or the store's operational settings, so the pathway never hard-codes a menu or hours.
+export function callContext(now = Date.now()) {
+  const p = tz.parts(now);
+  const dayKey = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][p.wd];
+  const today = config.hours?.service?.[dayKey];
+  const openNow = Boolean(today) && withinHours(now);
+  let nextOpen = "";
+  for (let i = openNow ? 1 : 0; i < 8 && !nextOpen; i++) {
+    const t = tz.addDays(tz.startOfDay(now), i);
+    const k = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][tz.parts(t).wd];
+    const h = config.hours?.service?.[k];
+    if (h && (i > 0 || p.h * 60 + p.mi < Number(h[0].split(":")[0]) * 60 + Number(h[0].split(":")[1]))) nextOpen = `${i === 0 ? "today" : i === 1 ? "tomorrow" : DAY_NAMES[k]} at ${spokenClock(h[0])}`;
+  }
+  const bookable = catalog.menu.filter((m) => m.opcode && !m.requiresAdvisor);
+  const advisorOnly = catalog.menu.filter((m) => m.opcode && m.requiresAdvisor);
+  const transport = config.transportation.options.filter((o) => transportationByKey(o.key).cat || o.default);
+  return {
+    dealer_name: config.dealerName,
+    timezone: config.timezone,
+    service_hours_spoken: hoursSpoken("service"),
+    today_hours_spoken: today ? `${spokenClock(today[0])} to ${spokenClock(today[1])}` : "closed",
+    open_now: String(openNow),
+    next_open_spoken: nextOpen,
+    menu_spoken: listSpoken(bookable.map((m) => m.spoken)).replace(", or ", ", and "),
+    menu_count: String(bookable.length),
+    advisor_only_spoken: listSpoken(advisorOnly.map((m) => m.spoken)).replace(", or ", ", and "),
+    transportation_spoken: listSpoken(transport.map((o) => o.spoken)),
+    opcode_options: opcodeOptions().map((o) => o.norm).join("; "),
+    opcode_options_count: String(opcodeOptions().length),
+    custom_concern_available: String(Boolean(config.services.allowCustomConcern && catalog.customConcern?.opcode)),
+    same_day_allowed: String(Boolean(B.allowSameDay)),
+    booking_horizon_days: String(B.horizonDays ?? 30),
+    catalog_ok: String(!catalog.error && catalog.menu.some((m) => m.opcode)),
+  };
 }
 
 // ---- HTTP -------------------------------------------------------------------------------
@@ -456,7 +528,9 @@ r.post("/services", wrap(async (s, b, res, base) => {
   const text = String(b.services_text ?? "").trim();
   if (!text) return fail(res, base, "missing_services", { bookable: false });
   s.concernText = text;
-  const hits = matchServices(text).map((m) => ({ ...m, concern: text }));
+  // Tier 1: the model's picks from the store's real opcode list (exact match only). Tier 2: keyword menu.
+                         const picked = matchPicks(b.opcode_picks).map((m) => ({ ...m, concern: text }));
+  const hits = picked.length ? picked : matchServices(text).map((m) => ({ ...m, concern: text }));
   const seenOp = new Set();
   const services = hits.filter((m) => m.opcode && !seenOp.has(m.opcode) && seenOp.add(m.opcode));
   const unresolved = hits.filter((m) => !m.opcode);
@@ -465,15 +539,20 @@ r.post("/services", wrap(async (s, b, res, base) => {
     if (config.services.allowCustomConcern && catalog.customConcern?.opcode) {
       services.push({ key: "custom", custom: true, spoken: "the concern you described", opcode: catalog.customConcern.opcode, opcodeDescription: catalog.customConcern.description ?? "Customer concern", concern: text, requiresAdvisor: config.services.customConcernRequiresAdvisor, type: "DEFAULT" });
       usedCustom = true;
-    } else return res.json({ ...base, ok: true, bookable: false, reason: unresolved.length ? "menu_unresolved" : "no_match", services_spoken: servicesSpoken(unresolved) });
+    } else {
+      console.log("[services] not bookable", JSON.stringify({ reason: unresolved.length ? "menu_unresolved" : "no_match", text: text.slice(0, 120), picks: String(b.opcode_picks ?? "").slice(0, 120) }));
+      return res.json({ ...base, ok: true, bookable: false, reason: unresolved.length ? "menu_unresolved" : "no_match", services_spoken: servicesSpoken(unresolved) });
+    }
   }
   s.services = services;
   const requiresAdvisor = services.some((x) => x.requiresAdvisor) || unresolved.some((x) => x.requiresAdvisor);
-  const symptom = (config.symptomGuide?.entries ?? []).find((e) => e.phrases.some((p) => lc(text).includes(lc(p))));
+  const hint = (config.symptomHints?.entries ?? []).find((e) => e.phrases.some((p) => lc(text).includes(lc(p))));
+  console.log("[services]", JSON.stringify({ via: picked.length ? "opcode_picks" : usedCustom ? "custom_concern" : "menu", opcodes: services.map((x) => x.opcode), requires_advisor: requiresAdvisor }));
   return res.json({
     ...base, ok: true, bookable: !requiresAdvisor, requires_advisor: requiresAdvisor, used_custom_concern: usedCustom,
     services_spoken: usedCustom ? "an inspection for the concern you described" : servicesSpoken(services),
-    symptom_spoken: symptom?.spoken ?? "", service_count: services.length,
+    symptom_detected: Boolean(hint), symptom_service_key: hint?.suggestService ?? "", service_count: services.length,
+    matched_via: picked.length ? "opcode_picks" : usedCustom ? "custom_concern" : "menu",
   });
 }));
 
@@ -539,7 +618,7 @@ r.post("/book", wrap(async (s, b, res, base) => {
   }
   s.booked = { startTime: when, response };
   console.log("[book]", JSON.stringify({ mode: response.mode, appointment_id: response.appointment_id, when: tz.spokenDateTime(when) }));
-  return res.json({ ...base, ok: true, booked: true, ...response, arrival_spoken: config.policies.arrivalInstructions });
+  return res.json({ ...base, ok: true, booked: true, ...response });
 }));
 
 r.post("/find", wrap(async (s, b, res, base, phone) => {
@@ -551,11 +630,11 @@ r.post("/find", wrap(async (s, b, res, base, phone) => {
   let appts = [];
   for (const c of customers) {
     const WINDOW = 7 * 86400000 - 60000; // Tekion caps each query at 7 days, so walk the horizon in windows
-    for (let from = start; from < end; from += WINDOW) {
-      const qs = new URLSearchParams({ customerId: c.id, appointmentStartTime: String(from), appointmentEndTime: String(Math.min(from + WINDOW, end)) });
-      const r = await tekion.get(`/appointments?${qs}`);
-      appts.push(...(r?.data ?? []));
-    }
+  for (let from = start; from < end; from += WINDOW) {
+    const qs = new URLSearchParams({ customerId: c.id, appointmentStartTime: String(from), appointmentEndTime: String(Math.min(from + WINDOW, end)) });
+    const r = await tekion.get(`/appointments?${qs}`);
+    appts.push(...(r?.data ?? []));
+  }
   }
   if (!appts.length && phone) {
     const idx = await buildApptIndex();
@@ -599,7 +678,15 @@ r.post("/cancel", wrap(async (s, b, res, base) => {
   return res.json({ ...base, ok: true, cancelled: true, appointment_spoken: apptSpoken(a), vehicle_spoken: spokenVehicle(a.vehicle) });
 }));
 
-r.post("/answer", wrap(async (_s, b, res, base) => res.json({ ...base, ok: true, ...answerQuestion(b.question) })));
+r.post("/answer", wrap(async (_s, b, res, base) => { await loadCatalog(); res.json({ ...base, ok: true, ...answerQuestion(b.question) }); }));
+
+// Call-start request from the pathway. Never throws: a degraded catalog still returns usable strings.
+const callContextHandler = async (_req, res) => {
+  try { await loadCatalog(); } catch (e) { console.error("[call-context] catalog", e.message); }
+  res.json({ ok: true, ...callContext() });
+};
+  r.get("/call-context", callContextHandler);
+  r.post("/call-context", callContextHandler);
 
 r.get("/catalog", async (_req, res) => {
   await loadCatalog();
