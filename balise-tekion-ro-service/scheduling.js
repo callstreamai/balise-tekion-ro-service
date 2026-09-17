@@ -405,6 +405,13 @@ export function answerQuestion(question) {
   return { topic: "unknown", spoken: "" };
 }
 
+// The few live facts the pathway needs mid-call, attached to the identify and new-customer responses so the
+// pathway never spends a separate request on them.
+export function ctxFields() {
+  const c = callContext();
+  return { now_spoken: c.now_spoken, opcode_options: c.opcode_options, custom_concern_available: c.custom_concern_available, catalog_ok: c.catalog_ok };
+}
+
 // Flat, spoken-ready variables for the pathway's call-start request. Everything here is derived from
 // live Tekion data or the store's operational settings, so the pathway never hard-codes a menu or hours.
 export function callContext(now = Date.now()) {
@@ -465,7 +472,9 @@ const fail = (res, base, reason, extra = {}) => res.json({ ...base, ok: false, r
 
 r.post("/identify", wrap(async (s, b, res, base, phone) => {
   if (!phone) return fail(res, base, "missing_phone", { found: false, match_count: 0 });
+  loadCatalog().catch(() => {}); // warm the catalog in the background; ctxFields() reads whatever is cached
   const customers = await searchCustomersByPhone(phone);
+  Object.assign(base, ctxFields());
   s.phone = phone;
   if (!customers.length) {
     // Fallback: a recent appointment on this phone gives us the customer id and vehicle.
@@ -502,6 +511,7 @@ r.post("/select-vehicle", wrap(async (s, b, res, base) => {
 }));
 
 r.post("/new-customer", wrap(async (s, b, res, base, phone) => {
+  Object.assign(base, ctxFields());
   const first = String(b.first_name ?? "").trim(), last = String(b.last_name ?? "").trim();
   const vt = String(b.vehicle_text ?? "").trim();
   const ym = vt.match(/\b(19|20)\d{2}\b/);
